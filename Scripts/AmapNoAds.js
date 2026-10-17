@@ -14,6 +14,7 @@ let body = $response.body;
 
 // 排查用：设为 true 后，日志会记录每次命中的接口、响应长度和时间
 const DEBUG = true;
+
 if (DEBUG) {
   console.log("AmapNoAds hit: " + url.split("?")[0] + " len=" + (body ? body.length : 0) + " t=" + Date.now());
 }
