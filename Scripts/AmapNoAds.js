@@ -1,7 +1,8 @@
 /*
  * AmapNoAds.js — 高德地图净化脚本（本地版，配合 AmapNoAds.conf 使用）
  * 1. 打车 content_info 去营销
- * 2. POI 详情页去广告模块，并移除租售房模块（rentSaleHouse / surroundOldSellHouse 及名称含 house 的模块）
+ * 2. POI 详情页去广告模块，移除租售房模块（rentSaleHouse / surroundOldSellHouse 及名称含 house 的模块），
+ *    并移除“服务/推荐/评价/发现”标签及其模块（见 REMOVE_TAB_TITLES）
  * 3. 搜索列表页去广告
  * 4. 酒店页面去广告
  *
@@ -14,6 +15,10 @@ let body = $response.body;
 // 租售房模块：精确名称 + 名称匹配（日志确认过 rentSaleHouse、surroundOldSellHouse）
 const HOUSE_EXACT = ["rentSaleHouse", "surroundOldSellHouse"];
 const HOUSE_PATTERN = /house/i;
+
+// 要整体移除的详情页标签（按 title 精确匹配）。
+// 标签位于 data.modules.anchor.data.items，每项含 title / anchor / module_list。
+const REMOVE_TAB_TITLES = ["服务", "推荐", "评价", "发现"];
 
 try {
   let obj = JSON.parse(body);
@@ -137,6 +142,50 @@ try {
 
         if (houseRemoved.length) {
           console.log("amap_clean house removed: " + houseRemoved.join(", "));
+        }
+      }
+
+      // 移除指定标签（服务/推荐/评价/发现）及其 module_list 里的模块
+      // 标签栏位于 data.modules.anchor.data.items；同时出现在保留标签里的模块不删
+      {
+        const anchorMod = obj.data.modules && obj.data.modules.anchor;
+        const items = anchorMod && anchorMod.data && anchorMod.data.items;
+
+        if (Array.isArray(items)) {
+          const dropNames = new Set();
+          const keepNames = new Set();
+          const keptItems = [];
+
+          items.forEach(it => {
+            const names = it && Array.isArray(it.module_list) ? it.module_list : [];
+            const title = String((it && it.title) || "").trim();
+            if (REMOVE_TAB_TITLES.includes(title)) {
+              names.forEach(n => dropNames.add(n));
+            } else {
+              keptItems.push(it);
+              names.forEach(n => keepNames.add(n));
+            }
+          });
+
+          let tabRemoved = 0;
+          dropNames.forEach(name => {
+            if (keepNames.has(name)) return;
+            removedSet.add(name);
+            if (obj.data.modules[name]) {
+              delete obj.data.modules[name];
+              tabRemoved++;
+            }
+          });
+
+          anchorMod.data.items = keptItems;
+
+          // 标签全部移除后，标签栏本身也不需要了
+          if (keptItems.length === 0) {
+            delete obj.data.modules.anchor;
+            removedSet.add("anchor");
+          }
+
+          console.log("amap_clean tabs removed: " + tabRemoved + " modules");
         }
       }
 
