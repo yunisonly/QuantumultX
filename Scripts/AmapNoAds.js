@@ -2,7 +2,7 @@
  * AmapNoAds.js — 高德地图净化脚本（本地版，配合 AmapNoAds.conf 使用）
  * 1. 打车 content_info 去营销
  * 2. POI 详情页去广告模块，移除租售房模块（rentSaleHouse / surroundOldSellHouse 及名称含 house 的模块），
- *    并移除“服务/推荐/评价/发现”标签及其模块（静态名单 TAB_MODULES + 标签栏动态读取）
+ *    并移除“服务/推荐/发现”标签及其模块（评价保留；静态名单 TAB_MODULES + 标签栏动态读取）
  * 3. 搜索列表页去广告
  * 4. 酒店页面去广告
  *
@@ -13,7 +13,7 @@ const url = $request.url;
 let body = $response.body;
 
 // 排查用：设为 true 后，日志会记录每次命中的接口、响应长度和时间
-const DEBUG = true;
+const DEBUG = false;
 if (DEBUG) {
   console.log("AmapNoAds hit: " + url.split("?")[0] + " len=" + (body ? body.length : 0) + " t=" + Date.now());
 }
@@ -24,9 +24,9 @@ const HOUSE_PATTERN = /house/i;
 
 // 要整体移除的详情页标签（按 title 精确匹配）。
 // 标签位于 data.modules.anchor.data.items，每项含 title / anchor / module_list。
-const REMOVE_TAB_TITLES = ["服务", "推荐", "评价", "发现"];
+const REMOVE_TAB_TITLES = ["服务", "推荐", "发现"];
 
-// 四个标签的 module_list 合集。详情接口每次点开小区会返回多个响应（首屏、完整、尾部），
+// “服务/推荐/发现”三个标签的 module_list 合集。详情接口每次点开小区会返回多个响应（首屏、完整、尾部），
 // 只有完整响应里带标签栏，所以这份名单用于在每个响应里直接删除这些模块。
 const TAB_MODULES = [
   // 服务
@@ -57,14 +57,6 @@ const TAB_MODULES = [
   // 推荐
   "merchantInfoRecEntrance", "listBizRec_1", "listBizRec_2", "waistRecEntrance",
   "operationActivityRecommendedBanner", "carServiceCard",
-  // 评价
-  "scenic_helper", "contributor", "commonAiAgent", "wikiInfoBelow", "combineReviews", "evaluate",
-  "evaluateVO", "societyPublicExperience", "impressionTabs", "commenttas",
-  "travelGuideAndQaPrePosition", "reviews", "hotelGraphicDetail", "homestayGraphicDetail",
-  "hotelFacilities", "hotelMustRead", "hotelSurround", "searchPlaMap", "scenic_voice",
-  "human_traffic", "scenic_mustplay", "scenic_route_intelligent", "scenic_service",
-  "scenic_parking", "scenic_knowledge", "collector_guide", "official_account",
-  "question_answer_card", "travelGuideAndQa",
   // 发现
   "retainInfo", "matrix_banner", "parentBizRec", "parentPoiRecEntrance", "nearbyRecommendModule",
   "new_operation_banner", "newRelatedRecommends", "sameIndustryRecommendModule",
@@ -231,8 +223,8 @@ try {
 
           anchorMod.data.items = keptItems;
 
-          // 标签全部移除后，标签栏本身也不需要了
-          if (keptItems.length === 0) {
+          // 剩下 0 个或 1 个标签时，标签栏没有意义，一并移除（模块本身不受影响）
+          if (keptItems.length <= 1) {
             delete obj.data.modules.anchor;
             removedSet.add("anchor");
           }
