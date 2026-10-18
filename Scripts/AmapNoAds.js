@@ -14,7 +14,6 @@ let body = $response.body;
 
 // 排查用：设为 true 后，日志会记录每次命中的接口、响应长度和时间
 const DEBUG = true;
-
 if (DEBUG) {
   console.log("AmapNoAds hit: " + url.split("?")[0] + " len=" + (body ? body.length : 0) + " t=" + Date.now());
 }
@@ -200,6 +199,15 @@ try {
           const dropNames = new Set();
           const keepNames = new Set();
           const keptItems = [];
+
+          if (DEBUG) {
+            console.log("AmapNoAds tabs: " + items.map(it => String(it && it.title) + "(" + ((it && it.module_list) || []).length + ")").join(" | "));
+            items.forEach(it => {
+              if (it && !REMOVE_TAB_TITLES.includes(String(it.title || "").trim())) {
+                console.log("AmapNoAds kept tab [" + it.title + "]: " + (it.module_list || []).join(",").slice(0, 500));
+              }
+            });
+          }
 
           items.forEach(it => {
             const names = it && Array.isArray(it.module_list) ? it.module_list : [];
