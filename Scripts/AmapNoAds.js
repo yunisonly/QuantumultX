@@ -1,363 +1,89 @@
 /*
  * AmapNoAds.js — 高德地图净化脚本（本地版，配合 AmapNoAds.conf 使用）
- * 1. 打车 content_info 去营销
- * 2. POI 详情页去广告模块，移除租售房模块（rentSaleHouse / surroundOldSellHouse 及名称含 house 的模块），
- *    并移除“服务/推荐/发现”标签及其模块（评价保留；静态名单 TAB_MODULES + 标签栏动态读取）
+ *
+ * 1. 打车 content_info：清营销、弹窗、底部 banner，金刚位只留 4 项
+ * 2. POI 详情页：删广告、租售房和“服务/推荐/发现”模块（见 REMOVE_MODULES）；
+ *    保留“评价”、百科、楼层导航等其余内容；标签栏只保留仍指向现存模块的标签
  * 3. 搜索列表页去广告
  * 4. 酒店页面去广告
  *
  * 放在 QuantumultX/Scripts/ 目录下，规则里直接写 AmapNoAds.js。
+ * DEBUG 设为 true 时，日志会列出每个详情响应处理后剩下的模块名和保留的标签。
  */
+
+const DEBUG = false;
 
 const url = $request.url;
 let body = $response.body;
 
-// 排查用：设为 true 后，日志会记录每次命中的接口、响应长度和时间
-const DEBUG = true;
-if (DEBUG) {
-  console.log("AmapNoAds hit: " + url.split("?")[0] + " len=" + (body ? body.length : 0) + " t=" + Date.now());
-}
-
-// 租售房模块：精确名称 + 名称匹配（日志确认过 rentSaleHouse、surroundOldSellHouse）
-const HOUSE_EXACT = ["rentSaleHouse", "surroundOldSellHouse"];
-const HOUSE_PATTERN = /house/i;
-
-// 要整体移除的详情页标签（按 title 精确匹配）。
-// 标签位于 data.modules.anchor.data.items，每项含 title / anchor / module_list。
-const REMOVE_TAB_TITLES = ["服务", "推荐", "发现"];
-
-// “服务/推荐/发现”三个标签的 module_list 合集。详情接口每次点开小区会返回多个响应（首屏、完整、尾部），
-// 只有完整响应里带标签栏，所以这份名单用于在每个响应里直接删除这些模块。
-const TAB_MODULES = [
-  // 服务
-  "combinedBannerAbove", "enhanceCustomerServicePoiModule", "enhanceIMQuestions", "imModule",
-  "CouponBanner", "common_coupon_bar", "houseOfficeBrandIntroduction", "houseOfficeNotice",
-  "house_coupon", "rentsaleagencyv2", "rentsaleagencyv3", "platformCustomerCommonModule",
-  "platformCustomerComplianceInfo", "house_price", "house_price_v2", "shopStructGift",
-  "houseTrendContainer", "cpt_service_simple", "cpt_service_shop", "coupon_entrance",
-  "commonGoodsShelf", "businessQualifications", "quickFlashSaleGoodsShelf",
-  "serviceLineUpGoodsShelf", "serviceBookingGoodsShelf", "houseShelf", "newsellhouse",
+// 要删除的模块名（纯名字清单，按作用分组）。新出现的模块名要手动补充到这里。
+const REMOVE_MODULES = new Set([
+  // 优惠券、营销与活动入口
+  "CouponBanner", "CouponWidget", "CouponMiddleBanner", "CouponDetailMiddleBanner",
+  "CouponFooterStickBanner", "CouponPopup", "CouponPush", "common_coupon_bar",
+  "coupon_entrance", "coupon_allowance", "MarketingGoods", "poiDetailNewBeltV2",
+  "adStoreBigBannerModule", "poiDetailAdBookModule", "image_banner", "combinedBannerAbove",
+  "combinedBannerBelow", "matrix_banner", "new_operation_banner",
+  "operationActivityRecommendedBanner", "activityRecommendation", "activity",
+  "shopActivity", "shopStdActivity", "retainInfo", "brand_shop_bar", "mallNews",
+  "shop_news", "shopNews", "notification", "subscription", "shopStructGift",
+  "commonHkfMiniPortal",
+  // 客服、咨询与免责声明
+  "enhanceCustomerServicePoiModule", "enhanceIMQuestions", "imModule", "imBottomGuide",
+  "platformCustomerCommonModule", "platformCustomerComplianceInfo", "consultancy",
+  "legal_document", "poi_intercept",
+  // 推荐与信息流
+  "poiDetailWaterFeed", "poiDetailWaterFeedTitle", "waterFallFeedTitle", "cityCardFeed",
+  "nearbyRecommendModule", "similarShelfRecommend", "yellowPageAdRecommendModule",
+  "similarShopRecommend", "merchantInfoRecEntrance", "listBizRec_1", "listBizRec_2",
+  "waistRecEntrance", "parentBizRec", "parentPoiRecEntrance", "newRelatedRecommends",
+  "sameIndustryRecommendModule", "legSameIndustryRecEntrance", "commercialRecEntrance",
+  "divergentRecommendModule", "everyOneToSee", "poiDetailNote",
+  // 商家服务与品牌介绍
+  "cpt_service_simple", "cpt_service_shop", "service_shop", "service_item",
+  "mechanic_card", "shopPerson", "shopBasePerson", "craftsman_entry", "brand_introduction",
+  "brand_story", "brandStory", "brand_service", "businessQualifications",
+  "shopCaseInfoCard", "shopBaseCase",
+  // 周边配套、房产周边与业主信息
+  "surroundFacilityInfo", "surround_facility", "surround_facility_new",
+  "surroundEstateNearbyRecommend", "nearby_old_sell_estate", "same_price_new_estate",
+  "nearby_office_estate", "first_surround_estate_tab", "second_surround_estate_tab",
+  "surround_rentoffice", "surround_selloffice", "surroundRentOffice", "surroundSellOffice",
+  "residentialOwners", "residentialOwnersVO", "rentsaleagencyv2", "rentsaleagencyv3",
+  "realtorRealStep",
+  // 租售房
+  "housesShelf", "houseOfficeBrandIntroduction", "houseOfficeNotice", "house_coupon",
+  "house_price", "house_price_v2", "houseTrendContainer", "houseShelf", "newsellhouse",
   "oldsellhouse", "renthouse", "foreclosurehouse", "officerenthouse", "officesellhouse",
-  "houseService", "houseAgentService", "rentsalehouse", "rentSaleHouse", "combinedBannerBelow",
-  "poi_intercept", "surround_oldsellhouse", "surround_renthouse", "surround_rentoffice",
-  "surround_selloffice", "surround_house_tab", "surroundOldSellHouse", "surroundRentHouse",
-  "surroundRentOffice", "surroundSellOffice", "surroundHouseTab", "surroundHouseNearbyRecommend",
-  "service_shop", "residentialOwnersVO", "residentialOwners", "realtorRealStep",
-  "coupon_allowance", "house_cpt_coupon", "house_apart_info", "consultancy", "craftsman_entry",
-  "shopPerson", "shopBasePerson", "legal_document", "poiDetailAdBookModule",
-  "horizontalGoodsShelf", "notification", "shop_news", "shopNews", "subscription",
-  "brand_introduction", "brand_story", "brandStory", "houseOfficeInfo", "houseOfficeService",
-  "brand_service", "activity", "shopActivity", "shopStdActivity", "service_item", "mechanic_card",
-  "houseEvaluationInfo", "surroundFacilityInfo", "surround_facility", "surround_facility_new",
-  "nearby_house", "surroundEstateNearbyRecommend", "nearby_old_sell_estate",
-  "nearby_new_house_estate", "hot_new_house_estate", "same_price_new_estate",
-  "nearby_office_estate", "shopCaseInfoCard", "shopBaseCase", "first_surround_estate_tab",
-  "second_surround_estate_tab", "house_cp_clues", "house_buying_agent", "house_rent_sale_agency",
-  "similarShopRecommend", "yellowPageAdRecommendModule", "similarShelfRecommend",
-  // 推荐
-  "merchantInfoRecEntrance", "listBizRec_1", "listBizRec_2", "waistRecEntrance",
-  "operationActivityRecommendedBanner", "carServiceCard",
-  // 发现
-  "retainInfo", "matrix_banner", "parentBizRec", "parentPoiRecEntrance", "nearbyRecommendModule",
-  "new_operation_banner", "newRelatedRecommends", "sameIndustryRecommendModule",
-  "legSameIndustryRecEntrance", "commercialRecEntrance", "divergentRecommendModule", "everyOneToSee"
-];
+  "houseService", "houseAgentService", "rentsalehouse", "rentSaleHouse",
+  "surround_oldsellhouse", "surround_renthouse", "surround_house_tab",
+  "surroundOldSellHouse", "surroundRentHouse", "surroundHouseTab",
+  "surroundHouseNearbyRecommend", "house_cpt_coupon", "house_apart_info",
+  "houseOfficeInfo", "houseOfficeService", "houseEvaluationInfo", "nearby_house",
+  "nearby_new_house_estate", "hot_new_house_estate", "house_cp_clues",
+  "house_buying_agent", "house_rent_sale_agency", "newHouseCptCoupon"
+]);
+
+// 标签栏里要整体移除的标签（按 title 匹配）；“评价”不在其中
+const REMOVE_TABS = ["服务", "推荐", "发现"];
+
+// 标签指向的模块名（标签的 anchor 字段，字符串或数组）
+const tabTargets = tab => [].concat(tab.anchor || []).filter(x => typeof x === "string");
 
 try {
-  let obj = JSON.parse(body);
+  const obj = JSON.parse(body);
+  const data = obj && obj.data;
 
-  // ==================== 1. 打车 content_info ====================
+  if (DEBUG) console.log("AmapNoAds hit: " + url.split("?")[0] + " len=" + (body ? body.length : 0));
+
   if (url.includes("/car/order/content_info")) {
-    if (obj?.data?.lubanData) {
-      // 清空营销皮肤
-      if (obj.data.lubanData.skin?.dataList) {
-        obj.data.lubanData.skin.dataList = [];
-      }
-
-      // 过滤金刚位工具箱（只保留指定4个）
-      if (obj.data.lubanData.kingToolBox?.dataList) {
-        const keep = [
-          "dache_toolbox_taxi_overseas_channel",
-          "dache_toolbox_hitch",
-          "dache_toolbox_GDIntercity",
-          "dache_toolbox_chauffeur"
-        ];
-
-        obj.data.lubanData.kingToolBox.dataList =
-          obj.data.lubanData.kingToolBox.dataList.filter(item => {
-            return item?.biz?.id && keep.includes(item.biz.id);
-          });
-      }
-
-      // 清除弹窗
-      if (obj.data.lubanData.popup?.dataList) {
-        obj.data.lubanData.popup.dataList = [];
-      }
-
-      // 清除右上角分享地址图标
-      if (obj.data.lubanData?.toolMapBar) {
-        obj.data.lubanData.toolMapBar = {};
-      }
-
-      // 清除底部banner
-      if (obj.data.lubanData.banner?.dataList) {
-        obj.data.lubanData.banner.dataList = [];
-      }
-    }
-
-    if (obj?.data?.matrixData?.c3DiversionCard?.dataList?.length > 0) {
-      // 附近景点推荐列表
-      obj.data.matrixData.c3DiversionCard.dataList = [];
-    }
-  }
-
-  // ==================== 2. POI 详情页去广告 + 去租售房 ====================
-  else if (url.includes("/shield/search/poi/detail")) {
-    if (obj?.data) {
-      const adModules = [
-        "CouponBanner",
-        "CouponWidget",
-        "CouponMiddleBanner",
-        "CouponDetailMiddleBanner",
-        "CouponFooterStickBanner",
-        "CouponPopup",
-        "MarketingGoods",
-        "poiDetailNewBeltV2",
-        "adStoreBigBannerModule",
-        "shopStructGift",
-        "quickFlashSaleGoodsShelf",
-        "poiDetailHotSaleShelf",
-        "group_buying_shelf",
-        //"commonGoodsShelf",
-        "kaProductMixServiceShelf",
-        "packageShelf",
-        "dayTripList",
-        "scenic_ticket",
-        "movie_info",
-        "ktvBookingShelf",
-        "carRentGroupBuy",
-        "carRentNorm",
-        "carRentalKaNorm",
-        "standardGasPriceShelf",
-        "housesShelf",
-        "mallNews",
-        "brand_shop_bar",
-        "enhanceCustomerServicePoiModule",
-        "imBottomGuide",
-        "image_banner",
-        "nearbyRecommendModule",
-        "poiDetailWaterFeed",
-        "poiDetailWaterFeedTitle",
-        "similarShelfRecommend",
-        "yellowPageAdRecommendModule",
-        "similarShopRecommend",
-        //"combineReviews",
-        "poiDetailNote",
-        "commonHkfMiniPortal",
-        "activityRecommendation",
-        "waterFallFeedTitle",
-        "cityCardFeed",
-        "hotelList",
-        "CouponPush"
-      ];
-
-      // 所有要移除的模块名（广告 + 租售房），regions 等引用清理也用它
-      const removeList = adModules.concat(HOUSE_EXACT, TAB_MODULES);
-      const removedSet = new Set(removeList);
-
-      if (DEBUG && obj.data.modules) {
-        console.log("AmapNoAds modules before: " + Object.keys(obj.data.modules).join(",").slice(0, 800));
-      }
-
-      // 删除广告模块与租售房模块
-      if (obj.data.modules) {
-        const houseRemoved = [];
-
-        removeList.forEach(key => {
-          if (obj.data.modules[key]) {
-            delete obj.data.modules[key];
-          }
-        });
-
-        // 名称含 house 的其他模块
-        Object.keys(obj.data.modules).forEach(key => {
-          if (HOUSE_PATTERN.test(key)) {
-            delete obj.data.modules[key];
-            removedSet.add(key);
-            houseRemoved.push(key);
-          }
-        });
-
-        if (houseRemoved.length) {
-          console.log("amap_clean house removed: " + houseRemoved.join(", "));
-        }
-      }
-
-      // 移除指定标签（服务/推荐/评价/发现）及其 module_list 里的模块
-      // 标签栏位于 data.modules.anchor.data.items；同时出现在保留标签里的模块不删
-      {
-        const anchorMod = obj.data.modules && obj.data.modules.anchor;
-        const items = anchorMod && anchorMod.data && anchorMod.data.items;
-
-        if (Array.isArray(items)) {
-          const dropNames = new Set();
-          const keepNames = new Set();
-          const keptItems = [];
-
-          if (DEBUG) {
-            items.slice(0, 2).forEach((it, i) => {
-              console.log("AmapNoAds tab sample " + i + ": " + JSON.stringify(it).slice(0, 300));
-            });
-            console.log("AmapNoAds tabs: " + items.map(it => String(it && it.title) + "(" + ((it && it.module_list) || []).length + ")").join(" | "));
-            items.forEach(it => {
-              if (it && !REMOVE_TAB_TITLES.includes(String(it.title || "").trim())) {
-                console.log("AmapNoAds kept tab [" + it.title + "]: " + (it.module_list || []).join(",").slice(0, 500));
-              }
-            });
-          }
-
-          items.forEach(it => {
-            const names = it && Array.isArray(it.module_list) ? it.module_list : [];
-            const title = String((it && it.title) || "").trim();
-            if (REMOVE_TAB_TITLES.includes(title)) {
-              names.forEach(n => dropNames.add(n));
-            } else {
-              keptItems.push(it);
-              names.forEach(n => keepNames.add(n));
-            }
-          });
-
-          let tabRemoved = 0;
-          dropNames.forEach(name => {
-            if (keepNames.has(name)) return;
-            removedSet.add(name);
-            if (obj.data.modules[name]) {
-              delete obj.data.modules[name];
-              tabRemoved++;
-            }
-          });
-
-          anchorMod.data.items = keptItems;
-
-          // 剩下 0 个或 1 个标签时，标签栏没有意义，一并移除（模块本身不受影响）
-          if (keptItems.length <= 1) {
-            delete obj.data.modules.anchor;
-            removedSet.add("anchor");
-          }
-
-          console.log("amap_clean tabs removed: " + tabRemoved + " modules");
-        }
-      }
-
-      // 清理 regions 引用
-      if (obj.data.regions) {
-        for (let region in obj.data.regions) {
-          if (Array.isArray(obj.data.regions[region])) {
-            obj.data.regions[region] =
-              obj.data.regions[region].filter(
-                item => !removedSet.has(item)
-              );
-          }
-        }
-      }
-
-      // 清理优惠券刷新列表
-      if (obj.data.meta?.vo_meta_info?.couponRefreshModules) {
-        obj.data.meta.vo_meta_info.couponRefreshModules = [];
-      }
-
-      // 清理 half_hidden_modules
-      if (obj.data.meta?.half_hidden_modules) {
-        obj.data.meta.half_hidden_modules =
-          obj.data.meta.half_hidden_modules.filter(
-            item => !removedSet.has(item)
-          );
-      }
-
-      // 处理地图 main_point
-      if (obj.data.modules?.poiMapModule?.data?.map?.main_point) {
-        const mainPoint =
-          obj.data.modules.poiMapModule.data.map.main_point;
-
-        // 删除营销纹理
-        if (mainPoint.dynamic_texture) {
-          delete mainPoint.dynamic_texture;
-        }
-
-        // 修改 card_id
-        mainPoint.card_id = "normal_lottie";
-
-        // 清空 logo
-        mainPoint.logo = "";
-      }
-    }
-  }
-
-  // ==================== 3. 搜索列表页去广告 ====================
-  else if (url.includes("/shield/search_poi/search/sp")) {
-    if (obj?.data) {
-      const searchAdModules = [
-        "BrandBannerCard",
-        "CustomerServiceAdEntrances",
-        "PrecisionEntrances",
-        "CouponBanner",
-        "HeaderTipInfo",
-        "HeaderTipSection"
-      ];
-
-      // 删除顶部广告模块
-      if (obj.data.modules) {
-        searchAdModules.forEach(key => {
-          if (obj.data.modules[key]) {
-            delete obj.data.modules[key];
-          }
-        });
-      }
-
-      // 清理 regions.listManage
-      if (obj.data.regions?.listManage) {
-        obj.data.regions.listManage =
-          obj.data.regions.listManage.filter(
-            item => !searchAdModules.includes(item)
-          );
-      }
-
-      if (Array.isArray(obj?.data?.modules?.listResult?.data?.list) &&
-        obj.data.modules.listResult.data.list.length > 0) {
-        obj.data.modules.listResult.data.list = obj.data.modules.listResult.data.list.filter(
-          item => item?.card_id === "PoiCardUniversal"
-        );
-      }
-    }
-  }
-
-  // ==================== 4. 酒店页面广告 ====================
-  else if (url.includes("/ws/info_bff/tradeUnionPortal")) {
-
-    if (obj.data.template === "hotelUnionPortal") {
-      if (obj.data.regions?.content && obj.data.regions.content.length > 0) {
-        obj.data.regions.content = ["user_filter_card", "filter_tab", "hotel_list"];
-      }
-      if (obj.data.regions?.other && obj.data.regions.other.length > 0) {
-        obj.data.regions.other = [];
-      }
-      if (obj.data.regions?.widget && obj.data.regions.widget.length > 0) {
-        obj.data.regions.widget = ["operation_widget", "hotel_booking"];
-      }
-
-      //  酒店搜索框底部关键词提示
-      if (obj?.data?.modules?.user_filter_card?.data) {
-        delete obj.data.modules.user_filter_card.data.sug_items_data;
-        obj.data.modules.user_filter_card.data.banner = {};
-      }
-
-      //  酒店页面的弹窗广告
-      if (obj?.data?.modules?.CouponPopup) delete obj.data.modules.CouponPopup;
-    }
-  }
-
-  if (DEBUG && url.includes("/shield/search/poi/detail") && obj?.data?.modules) {
-    console.log("AmapNoAds modules left: " + Object.keys(obj.data.modules).join(",").slice(0, 600));
+    carOrder(obj);
+  } else if (url.includes("/shield/search/poi/detail")) {
+    if (data) poiDetail(data);
+  } else if (url.includes("/shield/search_poi/search/sp")) {
+    if (data) searchList(data);
+  } else if (url.includes("/ws/info_bff/tradeUnionPortal")) {
+    if (data) hotel(data);
   }
 
   body = JSON.stringify(obj);
@@ -365,5 +91,148 @@ try {
   console.log("脚本错误: " + e);
 }
 
-if (DEBUG) console.log("AmapNoAds done t=" + Date.now());
 $done({ body });
+
+// ==================== 1. 打车 content_info ====================
+function carOrder(obj) {
+  const luban = obj?.data?.lubanData;
+  if (luban) {
+    if (luban.skin?.dataList) luban.skin.dataList = [];          // 营销皮肤
+    if (luban.popup?.dataList) luban.popup.dataList = [];        // 弹窗
+    if (luban.banner?.dataList) luban.banner.dataList = [];      // 底部 banner
+    if (luban.toolMapBar) luban.toolMapBar = {};                 // 右上角分享地址图标
+
+    // 金刚位工具箱只保留指定 4 个
+    const keep = [
+      "dache_toolbox_taxi_overseas_channel",
+      "dache_toolbox_hitch",
+      "dache_toolbox_GDIntercity",
+      "dache_toolbox_chauffeur"
+    ];
+    if (luban.kingToolBox?.dataList) {
+      luban.kingToolBox.dataList = luban.kingToolBox.dataList.filter(
+        item => item?.biz?.id && keep.includes(item.biz.id)
+      );
+    }
+  }
+
+  // 附近景点推荐列表
+  if (obj?.data?.matrixData?.c3DiversionCard?.dataList?.length > 0) {
+    obj.data.matrixData.c3DiversionCard.dataList = [];
+  }
+}
+
+// ==================== 2. POI 详情页 ====================
+function poiDetail(data) {
+  const mods = data.modules;
+  const extra = new Set();                       // 运行时发现、也要删除的模块名
+  const gone = name => REMOVE_MODULES.has(name) || extra.has(name);
+
+  // 标签栏位于 data.modules.anchor.data.items
+  const tabs = mods?.anchor?.data?.items;
+  const tabList = Array.isArray(tabs) ? tabs.filter(t => t && typeof t === "object") : [];
+
+  // 被移除标签里列出的模块一并删除；同时属于保留标签的模块不删
+  const keepNames = new Set();
+  tabList.forEach(t => {
+    if (!REMOVE_TABS.includes(String(t.title).trim())) tabTargets(t).forEach(n => keepNames.add(n));
+  });
+  tabList.forEach(t => {
+    if (REMOVE_TABS.includes(String(t.title).trim())) {
+      tabTargets(t).forEach(n => { if (!keepNames.has(n)) extra.add(n); });
+    }
+  });
+
+  // 删除模块
+  if (mods) {
+    Object.keys(mods).forEach(key => { if (gone(key)) delete mods[key]; });
+  }
+
+  // 标签栏：去掉被移除的标签，以及指向的模块全部已删的标签；只剩 0~1 个标签时整个标签栏不要
+  if (Array.isArray(tabs)) {
+    const alive = tabList.filter(t => {
+      if (REMOVE_TABS.includes(String(t.title).trim())) return false;
+      const targets = tabTargets(t);
+      return targets.length === 0 || !targets.every(gone);
+    });
+    if (alive.length <= 1) {
+      delete mods.anchor;
+      extra.add("anchor");
+    } else {
+      mods.anchor.data.items = alive;
+    }
+    if (DEBUG) {
+      console.log("AmapNoAds tabs kept: " +
+        alive.map(t => t.title + "→" + tabTargets(t).join("/")).join(" | ").slice(0, 400));
+    }
+  }
+
+  // regions、half_hidden_modules 里不再引用已删模块
+  const notGone = name => !gone(name);
+  if (data.regions) {
+    Object.keys(data.regions).forEach(k => {
+      if (Array.isArray(data.regions[k])) data.regions[k] = data.regions[k].filter(notGone);
+    });
+  }
+  if (data.meta?.half_hidden_modules) {
+    data.meta.half_hidden_modules = data.meta.half_hidden_modules.filter(notGone);
+  }
+  if (data.meta?.vo_meta_info?.couponRefreshModules) {
+    data.meta.vo_meta_info.couponRefreshModules = [];
+  }
+
+  // 地图定位点：去掉营销纹理和 logo
+  const mp = mods?.poiMapModule?.data?.map?.main_point;
+  if (mp) {
+    delete mp.dynamic_texture;
+    mp.card_id = "normal_lottie";
+    mp.logo = "";
+  }
+
+  if (DEBUG) console.log("AmapNoAds modules left: " + Object.keys(mods || {}).join(",").slice(0, 600));
+}
+
+// ==================== 3. 搜索列表页 ====================
+function searchList(data) {
+  const adModules = [
+    "BrandBannerCard",
+    "CustomerServiceAdEntrances",
+    "PrecisionEntrances",
+    "CouponBanner",
+    "HeaderTipInfo",
+    "HeaderTipSection"
+  ];
+
+  if (data.modules) {
+    adModules.forEach(key => { delete data.modules[key]; });
+  }
+  if (data.regions?.listManage) {
+    data.regions.listManage = data.regions.listManage.filter(item => !adModules.includes(item));
+  }
+
+  // 结果列表只保留普通地点卡片
+  const list = data.modules?.listResult?.data?.list;
+  if (Array.isArray(list) && list.length > 0) {
+    data.modules.listResult.data.list = list.filter(item => item?.card_id === "PoiCardUniversal");
+  }
+}
+
+// ==================== 4. 酒店页面 ====================
+function hotel(data) {
+  if (data.template !== "hotelUnionPortal") return;
+
+  const regions = data.regions;
+  if (regions?.content?.length > 0) regions.content = ["user_filter_card", "filter_tab", "hotel_list"];
+  if (regions?.other?.length > 0) regions.other = [];
+  if (regions?.widget?.length > 0) regions.widget = ["operation_widget", "hotel_booking"];
+
+  // 搜索框底部关键词提示
+  const filter = data.modules?.user_filter_card?.data;
+  if (filter) {
+    delete filter.sug_items_data;
+    filter.banner = {};
+  }
+
+  // 弹窗广告
+  if (data.modules?.CouponPopup) delete data.modules.CouponPopup;
+}
