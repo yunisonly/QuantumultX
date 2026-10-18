@@ -28,6 +28,12 @@ const REMOVE_MODULES = new Set([
   "shopActivity", "shopStdActivity", "retainInfo", "brand_shop_bar", "mallNews",
   "shop_news", "shopNews", "notification", "subscription", "shopStructGift",
   "commonHkfMiniPortal",
+    // 商品货架、团购、票务与预订
+  "poiDetailHotSaleShelf", "quickFlashSaleGoodsShelf", "group_buying_shelf",
+  "kaProductMixServiceShelf", "packageShelf", "dayTripList", "scenic_ticket", "movie_info",
+  "ktvBookingShelf", "carRentGroupBuy", "carRentNorm", "carRentalKaNorm",
+  "standardGasPriceShelf", "commonGoodsShelf", "serviceLineUpGoodsShelf",
+  "serviceBookingGoodsShelf", "horizontalGoodsShelf", "hotelList", "carServiceCard",
   // 客服、咨询与免责声明
   "enhanceCustomerServicePoiModule", "enhanceIMQuestions", "imModule", "imBottomGuide",
   "platformCustomerCommonModule", "platformCustomerComplianceInfo", "consultancy",
