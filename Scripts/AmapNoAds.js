@@ -165,6 +165,10 @@ try {
       const removeList = adModules.concat(HOUSE_EXACT, TAB_MODULES);
       const removedSet = new Set(removeList);
 
+      if (DEBUG && obj.data.modules) {
+        console.log("AmapNoAds modules before: " + Object.keys(obj.data.modules).join(",").slice(0, 800));
+      }
+
       // 删除广告模块与租售房模块
       if (obj.data.modules) {
         const houseRemoved = [];
@@ -201,6 +205,9 @@ try {
           const keptItems = [];
 
           if (DEBUG) {
+            items.slice(0, 2).forEach((it, i) => {
+              console.log("AmapNoAds tab sample " + i + ": " + JSON.stringify(it).slice(0, 300));
+            });
             console.log("AmapNoAds tabs: " + items.map(it => String(it && it.title) + "(" + ((it && it.module_list) || []).length + ")").join(" | "));
             items.forEach(it => {
               if (it && !REMOVE_TAB_TITLES.includes(String(it.title || "").trim())) {
