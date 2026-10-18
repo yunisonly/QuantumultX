@@ -28,7 +28,7 @@ const REMOVE_MODULES = new Set([
   "shopActivity", "shopStdActivity", "retainInfo", "brand_shop_bar", "mallNews",
   "shop_news", "shopNews", "notification", "subscription", "shopStructGift",
   "commonHkfMiniPortal",
-    // 商品货架、团购、票务与预订
+  // 商品货架、团购、票务与预订
   "poiDetailHotSaleShelf", "quickFlashSaleGoodsShelf", "group_buying_shelf",
   "kaProductMixServiceShelf", "packageShelf", "dayTripList", "scenic_ticket", "movie_info",
   "ktvBookingShelf", "carRentGroupBuy", "carRentNorm", "carRentalKaNorm",
@@ -67,7 +67,9 @@ const REMOVE_MODULES = new Set([
   "surroundHouseNearbyRecommend", "house_cpt_coupon", "house_apart_info",
   "houseOfficeInfo", "houseOfficeService", "houseEvaluationInfo", "nearby_house",
   "nearby_new_house_estate", "hot_new_house_estate", "house_cp_clues",
-  "house_buying_agent", "house_rent_sale_agency", "newHouseCptCoupon"
+  "house_buying_agent", "house_rent_sale_agency", "newHouseCptCoupon",
+  // 评价区（探测日志确认）：居住指数评分卡 evaluateVO、足迹打卡 check_in、编辑地点信息
+  "evaluateVO", "check_in", "comprehensiveEditEntrance"
 ]);
 
 // 标签栏里要整体移除的标签（按 title 匹配）；“评价”不在其中
@@ -153,6 +155,9 @@ function poiDetail(data) {
   if (mods) {
     Object.keys(mods).forEach(key => { if (gone(key)) delete mods[key]; });
   }
+
+  // 用户评价模块里的“写评价”入口（reviews.data.write_comment），保留评价列表
+  if (mods?.reviews?.data) delete mods.reviews.data.write_comment;
 
   // 标签栏：去掉被移除的标签，以及指向的模块全部已删的标签；只剩 0~1 个标签时整个标签栏不要
   if (Array.isArray(tabs)) {
