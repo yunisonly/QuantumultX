@@ -180,7 +180,7 @@ if (url.includes("/gw/mtop.taobao.idlemtopsearch.search")) {
 
 
 if (url.includes("/mtop.taobao.idle.group.myself.banner")) {
-    obj.data.bannerList = [];
+    //obj.data.bannerList = [];
 }
 
 
