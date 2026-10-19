@@ -220,15 +220,15 @@ if (url.includes("idle.fun.follow.feed.list")) {
 }
 
 if (url.includes("idle.fun.follow.often.visit")) {
-    //obj.data.sections = [];
+    obj.data.sections = [];
 }
 
 if (url.includes("idle.circle.myself.banner/1.0")) {
-    //obj.data.bannerList = [];
+    obj.data.bannerList = [];
 }
 
 if (url.includes("idle.circle.visited/1.0")) {
-    //obj.data.visitedCircleList = [];
+    obj.data.visitedCircleList = [];
 }
 
 if (url.includes("follow.recommend.feed.list")) {
