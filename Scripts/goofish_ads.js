@@ -25,7 +25,7 @@ if (url.includes("/gw/mtop.taobao.idlehome.home.nextfresh")) {
     });
   }
   // 首页新的顶部图标菜单
-  obj.data.homeTopList = [];
+  //obj.data.homeTopList = [];
 }
 
 if (url.includes("/gw/mtop.taobao.idle.local.home")) {
