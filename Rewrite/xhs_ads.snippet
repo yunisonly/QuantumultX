@@ -2,7 +2,6 @@
 # 整理自社区规则 (墨鱼 @ddgksf2013 / fmz200): 已去重、合并脚本规则、去除全部第三方脚本链接
 # 用法: 规则粘入 [rewrite_local], https://raw.githubusercontent.com/yunisonly/QuantumultX/main/Scripts/xhs_ads.js 放本地脚本目录, [mitm] 追加 hostname
 
-[rewrite_local]
 # ---- 脚本处理 (全部接口合并为一条, 指向本地脚本) ----
 ^https?://[a-z]+\.xiaohongshu\.com/api/sns/v\d+/(?:note/(?:widgets|feed\?|imagefeed|videofeed\?|tabfeed|redtube\?|comment/list|video/save|live_photo/save)|homefeed(?:\?|/categories)|search/(?:hint|hot_list|trending|notes\?|banner_list)|system_service/(?:splash_config|config\?)) url script-response-body https://raw.githubusercontent.com/yunisonly/QuantumultX/main/Scripts/xhs_ads.js
 
@@ -35,5 +34,4 @@
 # ^https?://[a-z]+\.xiaohongshu\.com/v\d+/stateReport url reject-200
 # ^https?://[a-z]+\.xiaohongshu\.com/data/native/matrix_switches url reject-200
 
-[mitm]
 hostname = *.xiaohongshu.com
