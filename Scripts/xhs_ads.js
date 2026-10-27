@@ -154,15 +154,17 @@ const ROUTES = [
         obj.data.categories = obj.data.categories.filter(c => c && !DROP.has(c.oid));
     }],
 
-    // 发现页瀑布流: 滤掉带 ads 标记的广告卡
+    // 发现页瀑布流: 滤掉推广卡 (2026-10-27 探针实锤: v6 接口已无 ads 字段,
+    // 真实标记为 is_ads=true 且带 ads_info 对象; ads 保留兼容旧版本)
     [/\/homefeed\?/, obj => {
-        if (Array.isArray(obj.data)) obj.data = obj.data.filter(c => !(c && c.ads));
-        else if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !(c && c.ads));
+        const isAd = c => c && (c.ads || c.is_ads || c.ads_info);
+        if (Array.isArray(obj.data)) obj.data = obj.data.filter(c => !isAd(c));
+        else if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !isAd(c));
     }],
 
-    // 搜索结果: 滤掉带 ads 标记的广告卡
+    // 搜索结果: 同一套卡片标记, 滤掉推广卡
     [/\/search\/notes\?/, obj => {
-        if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !(c && c.ads));
+        if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !(c && (c.ads || c.is_ads || c.ads_info)));
     }],
 
     // 搜索页横幅: 清空
