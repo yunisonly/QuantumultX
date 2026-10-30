@@ -79,6 +79,17 @@ function captureLivePhoto(item) {
     if (list) saveList(PHOTO_KEY, list);
 }
 
+// 品牌合作标记: widgets_context (JSON 字符串) 内的 order_cooperate=true。
+// 这类推广贴 is_ads 常为 false (2026-10-29 样本「一介书生」卡), 2026-10-30 Han 定案一并屏蔽。
+function hasCoop(c) {
+    try {
+        const w = c && c.widgets_context;
+        if (!w) return false;
+        const s = typeof w === "string" ? w : JSON.stringify(w);
+        return /"order_cooperate"\s*:\s*true/.test(s);
+    } catch (e) { return false; }
+}
+
 // 递归清空任意层级下名为 ads 的数组 (开屏配置用)
 function clearAdsArrays(node, depth) {
     if (!node || typeof node !== "object" || depth > 3) return;
@@ -157,14 +168,14 @@ const ROUTES = [
     // 发现页瀑布流: 滤掉推广卡 (2026-10-27 探针实锤: v6 接口已无 ads 字段,
     // 真实标记为 is_ads=true 且带 ads_info 对象; ads 保留兼容旧版本)
     [/\/homefeed\?/, obj => {
-        const isAd = c => c && (c.ads || c.is_ads || c.ads_info);
+        const isAd = c => c && (c.ads || c.is_ads || c.ads_info || hasCoop(c));
         if (Array.isArray(obj.data)) obj.data = obj.data.filter(c => !isAd(c));
         else if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !isAd(c));
     }],
 
     // 搜索结果: 同一套卡片标记, 滤掉推广卡
     [/\/search\/notes\?/, obj => {
-        if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !(c && (c.ads || c.is_ads || c.ads_info)));
+        if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !(c && (c.ads || c.is_ads || c.ads_info || hasCoop(c))));
     }],
 
     // 搜索页横幅: 清空
