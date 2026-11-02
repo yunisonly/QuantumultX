@@ -11,7 +11,7 @@
  * DEBUG 设为 true 时，日志会列出每个详情响应处理后剩下的模块名和保留的标签。
  */
 
-const DEBUG = false;
+const DEBUG = true;
 
 const url = $request.url;
 let body = $response.body;
