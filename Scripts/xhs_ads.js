@@ -2,7 +2,7 @@
  * 小红书去广告 · 个人版 (Quantumult X, script-response-body)
  * 由社区脚本 (@ddgksf2013 V1.0.28) 反混淆整理重写: 去除混淆与 Env 框架、
  * 去除全部作者推广链接, 逻辑按接口合并实现。配套规则见 xhs_rules.conf。
- * 功能: 信息流广告过滤 / 笔记带货清理 / 无水印保存 / 开屏与搜索净化。
+ * 功能: 信息流严筛 (只留正常用户图文帖, 视频与带特殊标记帖全删) / 笔记带货清理 / 无水印保存 / 开屏与搜索净化。
  */
 
 const url = ($request && $request.url) || "";
@@ -90,6 +90,84 @@ function hasCoop(c) {
     } catch (e) { return false; }
 }
 
+// ============ 严筛 (2026-11-11 Han 定案): 帖子流只留正常用户图文帖 ============
+// 删帖条件 (任一命中即删, 顶层与 note_card/note 子对象各查一层):
+//   ① 视频帖全删 (不只是带标记的视频): type=video / note_type=1 / 带 video_info_v2 / model_type=video
+//   ② 直播卡全删: type=live / is_live=true / 带 live_info (实况照片 live_photo 不算直播, 不受影响)
+//   ③ 广告标记: ads / is_ads / ads_info
+//   ④ 合作与商业标记: widgets_context 里带 cooperat/commerce/brand/promo/sponsor/advert/goods 字样
+//      (含 order_cooperate, 是 hasCoop 的超集)
+//   ⑤ 带货挂载: has_related_goods=true 或 related_goods_num>0
+// 代价 (已知会并接受): 带商品链接的普通用户帖、带合作字样的生活帖会一并消失;
+//   品牌号无标记的自发普通帖不在标记范围内, 照常保留。
+function subCards(c) {
+    const subs = [];
+    if (c && typeof c === "object") {
+        for (let k of ["note_card", "note", "card"]) {
+            if (c[k] && typeof c[k] === "object") subs.push(c[k]);
+        }
+    }
+    return subs;
+}
+function isVideoCard(c) {
+    if (!c || typeof c !== "object") return false;
+    for (let o of [c].concat(subCards(c))) {
+        if (o.type === "video") return true;
+        if (o.note_type === 1 || o.note_type === "1") return true;
+        if (o.video_info_v2) return true;
+        if (o.model_type === "video") return true;
+    }
+    return false;
+}
+function isLiveCard(c) {
+    if (!c || typeof c !== "object") return false;
+    for (let o of [c].concat(subCards(c))) {
+        if (o.type === "live") return true;
+        if (o.is_live === true) return true;
+        if (o.live_info) return true;
+    }
+    return false;
+}
+function hasSpecialMark(c) {
+    if (!c || typeof c !== "object") return false;
+    for (let o of [c].concat(subCards(c))) {
+        if (o.ads || o.is_ads || o.ads_info) return true;
+        if (o.has_related_goods === true) return true;
+        if (typeof o.related_goods_num === "number" && o.related_goods_num > 0) return true;
+        try {
+            const w = o.widgets_context;
+            if (w) {
+                let s = typeof w === "string" ? w : JSON.stringify(w);
+                // 先抹掉显式假值标记 ("order_cooperate":false 之类), 免得键名本身误触发
+                s = s.replace(/"[a-z_]*(?:cooperat|commerce|brand|promo|sponsor|advert|goods)[a-z_]*"\s*:\s*(?:false|0|null)/gi, "");
+                if (/cooperat|commerce|brand|promo|sponsor|advert|goods/i.test(s)) return true;
+            }
+        } catch (e) {}
+    }
+    return false;
+}
+const dropCard = c => isVideoCard(c) || isLiveCard(c) || hasSpecialMark(c);
+
+// [XHSW] 漏网卡指纹 (临时): 漏过严筛的卡, 按字段形状记一次结构, 供定位视频的真实标记字段;
+// 定案后连同本函数与调用一并删除。
+const SHAPE_KEY = "xhs_survivor_shapes_v1";
+function logSurvivor(c) {
+    try {
+        if (!c || typeof c !== "object") return;
+        const sub = subCards(c)[0];
+        const sig = Object.keys(c).sort().join(",") + "|" + (sub ? Object.keys(sub).sort().join(",") : "");
+        let seen = {};
+        try { seen = JSON.parse(store.get(SHAPE_KEY) || "{}"); } catch (e) {}
+        if (seen[sig]) return;
+        seen[sig] = 1;
+        store.set(JSON.stringify(seen), SHAPE_KEY);
+        const pick = o => ["type", "note_type", "model_type"].map(k => k + "=" + (o[k] === undefined ? "-" : String(o[k]))).join(" ");
+        console.log("[XHSW] survivor keys=[" + Object.keys(c).slice(0, 20).join(",") + "] " + pick(c) +
+            (sub ? " sub.keys=[" + Object.keys(sub).slice(0, 20).join(",") + "] " + pick(sub) : "") +
+            " title=" + String(c.title || c.display_title || (sub && (sub.title || sub.display_title)) || "").slice(0, 20));
+    } catch (e) {}
+}
+
 // 递归清空任意层级下名为 ads 的数组 (开屏配置用)
 function clearAdsArrays(node, depth) {
     if (!node || typeof node !== "object" || depth > 3) return;
@@ -134,28 +212,33 @@ const ROUTES = [
         for (let it of items) cleanCard(it);
     }],
 
-    // 视频流 / 关注流: 去带货 + 无水印 + 留存视频地址
+    // 视频流 / 关注流: 先严筛删帖, 存活卡再去带货 + 无水印 + 留存视频地址
     [/\/note\/(tab|video)feed/, obj => {
         const items = (obj.data && (obj.data.items || obj.data)) || [];
         if (!Array.isArray(items)) return;
-        for (let it of items) { cleanCard(it); captureVideo(it); }
+        const kept = items.filter(it => !dropCard(it));
+        for (let it of kept) { cleanCard(it); captureVideo(it); }
+        if (obj.data.items) obj.data.items = kept; else obj.data = kept;
     }],
 
-    // 笔记流: 去带货 + 无水印
+    // 笔记流: 先严筛删帖, 存活卡再去带货 + 无水印
     [/\/note\/feed/, obj => {
         if (!Array.isArray(obj.data)) return;
+        obj.data = obj.data.filter(c => !dropCard(c));
         for (let it of obj.data) cleanCard(it);
     }],
 
-    // 图文流: 去带货 + 无水印 + 留存实况地址
+    // 图文流: 先严筛删帖, 存活卡再去带货 + 无水印 + 留存实况地址
     [/\/note\/imagefeed/, obj => {
         const items = (obj.data && (obj.data.items || obj.data)) || [];
         if (!Array.isArray(items)) return;
-        for (let it of items) {
+        const kept = items.filter(it => !dropCard(it));
+        for (let it of kept) {
             cleanCard(it);
             if (it && Array.isArray(it.note_list)) it.note_list.forEach(captureLivePhoto);
             captureLivePhoto(it);
         }
+        if (obj.data.items) obj.data.items = kept; else obj.data = kept;
     }],
 
     // 首页频道栏: 去掉直播等频道 (原脚本另有一个被混淆的 oid, 未能还原)
@@ -165,17 +248,16 @@ const ROUTES = [
         obj.data.categories = obj.data.categories.filter(c => c && !DROP.has(c.oid));
     }],
 
-    // 发现页瀑布流: 滤掉推广卡 (2026-10-27 探针实锤: v6 接口已无 ads 字段,
-    // 真实标记为 is_ads=true 且带 ads_info 对象; ads 保留兼容旧版本)
+    // 发现页瀑布流: 严筛——只留正常用户图文帖 (视频/直播全删, 带特殊标记全删;
+    // 2026-10-27 探针实锤: v6 接口已无 ads 字段, 真实标记为 is_ads/ads_info, ads 保留兼容旧版)
     [/\/homefeed\?/, obj => {
-        const isAd = c => c && (c.ads || c.is_ads || c.ads_info || hasCoop(c));
-        if (Array.isArray(obj.data)) obj.data = obj.data.filter(c => !isAd(c));
-        else if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !isAd(c));
+        if (Array.isArray(obj.data)) { obj.data = obj.data.filter(c => !dropCard(c)); obj.data.forEach(logSurvivor); }
+        else if (obj.data && Array.isArray(obj.data.items)) { obj.data.items = obj.data.items.filter(c => !dropCard(c)); obj.data.items.forEach(logSurvivor); }
     }],
 
-    // 搜索结果: 同一套卡片标记, 滤掉推广卡
+    // 搜索结果: 同一套严筛
     [/\/search\/notes\?/, obj => {
-        if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !(c && (c.ads || c.is_ads || c.ads_info || hasCoop(c))));
+        if (obj.data && Array.isArray(obj.data.items)) { obj.data.items = obj.data.items.filter(c => !dropCard(c)); obj.data.items.forEach(logSurvivor); }
     }],
 
     // 搜索页横幅: 清空
