@@ -149,23 +149,40 @@ function hasSpecialMark(c) {
 const dropCard = c => isVideoCard(c) || isLiveCard(c) || hasSpecialMark(c);
 
 // [XHSW] 漏网卡指纹 (临时): 漏过严筛的卡, 按字段形状记一次结构, 供定位视频的真实标记字段;
-// 定案后连同本函数与调用一并删除。
-const SHAPE_KEY = "xhs_survivor_shapes_v1";
-function logSurvivor(c) {
+// 定案后连同本段与调用一并删除。两条通道并行:
+//   ① console.log (部分隧道日志导出不含脚本 console 输出, 会丢);
+//   ② 把指纹拼进一个注定失败的 http 请求 URL (xhsd.invalid)——隧道日志必记完整 URL, 不会丢。
+// 递归扫 type/video/live/media 类字段 (路径=值), 不论标记藏在哪一层都现形。
+const SHAPE_KEY = "xhs_survivor_shapes_v3";
+let PENDING_DIAG = "";
+function typeScan(o, path, depth, out) {
+    if (!o || typeof o !== "object" || depth > 3 || out.length >= 14) return;
+    for (let k of Object.keys(o)) {
+        const v = o[k];
+        if (/type|video|live|media|duration/i.test(k)) {
+            if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") out.push(path + k + "=" + String(v).slice(0, 24));
+            else if (v && typeof v === "object" && !Array.isArray(v)) out.push(path + k + "=<obj>");
+        }
+        if (v && typeof v === "object" && !Array.isArray(v)) typeScan(v, path + k + ".", depth + 1, out);
+    }
+}
+function survivorLine(c) {
     try {
-        if (!c || typeof c !== "object") return;
+        if (!c || typeof c !== "object") return "";
         const sub = subCards(c)[0];
         const sig = Object.keys(c).sort().join(",") + "|" + (sub ? Object.keys(sub).sort().join(",") : "");
         let seen = {};
         try { seen = JSON.parse(store.get(SHAPE_KEY) || "{}"); } catch (e) {}
-        if (seen[sig]) return;
+        if (seen[sig]) return "";
         seen[sig] = 1;
         store.set(JSON.stringify(seen), SHAPE_KEY);
-        const pick = o => ["type", "note_type", "model_type"].map(k => k + "=" + (o[k] === undefined ? "-" : String(o[k]))).join(" ");
-        console.log("[XHSW] survivor keys=[" + Object.keys(c).slice(0, 20).join(",") + "] " + pick(c) +
-            (sub ? " sub.keys=[" + Object.keys(sub).slice(0, 20).join(",") + "] " + pick(sub) : "") +
-            " title=" + String(c.title || c.display_title || (sub && (sub.title || sub.display_title)) || "").slice(0, 20));
-    } catch (e) {}
+        const scan = [];
+        typeScan(c, "", 0, scan);
+        const line = "T:" + String(c.title || c.display_title || (sub && (sub.title || sub.display_title)) || "").slice(0, 16) +
+            " | " + scan.join(" ") + " | keys:" + Object.keys(c).slice(0, 14).join(",");
+        console.log("[XHSW] " + line);
+        return line;
+    } catch (e) { return ""; }
 }
 
 // 递归清空任意层级下名为 ads 的数组 (开屏配置用)
@@ -251,13 +268,24 @@ const ROUTES = [
     // 发现页瀑布流: 严筛——只留正常用户图文帖 (视频/直播全删, 带特殊标记全删;
     // 2026-10-27 探针实锤: v6 接口已无 ads 字段, 真实标记为 is_ads/ads_info, ads 保留兼容旧版)
     [/\/homefeed\?/, obj => {
-        if (Array.isArray(obj.data)) { obj.data = obj.data.filter(c => !dropCard(c)); obj.data.forEach(logSurvivor); }
-        else if (obj.data && Array.isArray(obj.data.items)) { obj.data.items = obj.data.items.filter(c => !dropCard(c)); obj.data.items.forEach(logSurvivor); }
+        let arr = null;
+        if (Array.isArray(obj.data)) arr = obj.data;
+        else if (obj.data && Array.isArray(obj.data.items)) arr = obj.data.items;
+        if (arr) {
+            const kept = arr.filter(c => !dropCard(c));
+            const fresh = [];
+            kept.forEach(c => { const l = survivorLine(c); if (l) fresh.push(l); });
+            if (Array.isArray(obj.data)) obj.data = kept; else obj.data.items = kept;
+            if (fresh.length) PENDING_DIAG = fresh.join(" ;; ").slice(0, 1500);
+        } else {
+            const l = survivorLine({ _shape: 1, title: "DATASHAPE", keys_dump: obj.data ? Object.keys(obj.data).join(",") : "null" });
+            if (l) PENDING_DIAG = "SHAPE " + l;
+        }
     }],
 
     // 搜索结果: 同一套严筛
     [/\/search\/notes\?/, obj => {
-        if (obj.data && Array.isArray(obj.data.items)) { obj.data.items = obj.data.items.filter(c => !dropCard(c)); obj.data.items.forEach(logSurvivor); }
+        if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !dropCard(c));
     }],
 
     // 搜索页横幅: 清空
@@ -303,4 +331,19 @@ try {
     }
 } catch (e) { console.log("[XHS] error: " + e); }
 
-$done(body ? { body } : {});
+// 指纹外发 (临时, 见 [XHSW] 段): 有新漏网形状时, 把指纹拼进一个 http 请求 URL 发出,
+// 隧道日志会记下完整 URL; $done 最迟 900ms 后照常执行, 不拖慢信息流。
+let _finished = false;
+function _finish() {
+    if (_finished) return;
+    _finished = true;
+    $done(body ? { body } : {});
+}
+if (PENDING_DIAG && typeof $task !== "undefined" && $task.fetch) {
+    try {
+        $task.fetch({ url: "http://xhsd.invalid/" + encodeURIComponent(PENDING_DIAG), method: "GET" }).then(_finish, _finish);
+        setTimeout(_finish, 900);
+    } catch (e) { _finish(); }
+} else {
+    _finish();
+}
