@@ -1,8 +1,6 @@
 /**
  * 小红书去广告 · 个人版 (Quantumult X, script-response-body)
- * 由社区脚本 (@ddgksf2013 V1.0.28) 反混淆整理重写: 去除混淆与 Env 框架、
- * 去除全部作者推广链接, 逻辑按接口合并实现。配套规则见 xhs_rules.conf。
- * 功能: 信息流严筛 (只留正常用户图文帖, 视频与带特殊标记帖全删) / 笔记带货清理 / 无水印保存 / 开屏与搜索净化。
+ * 功能: 信息流严筛 (带特殊标记帖全删, 直播删, 视频保留) / 笔记带货清理 / 无水印保存 / 开屏与搜索净化。
  */
 
 const url = ($request && $request.url) || "";
@@ -90,16 +88,16 @@ function hasCoop(c) {
     } catch (e) { return false; }
 }
 
-// ============ 严筛 (2026-11-11 Han 定案): 帖子流只留正常用户图文帖 ============
+// ============ 严筛 (2026-11-11 Han 定案): 帖子流只留正常用户内容帖 ============
 // 删帖条件 (任一命中即删, 顶层与 note_card/note 子对象各查一层):
-//   ① 视频帖全删 (不只是带标记的视频): type=video / note_type=1 / 带 video_info_v2 / model_type=video
-//   ② 直播卡全删: type=live / is_live=true / 带 live_info (实况照片 live_photo 不算直播, 不受影响)
-//   ③ 广告标记: ads / is_ads / ads_info
-//   ④ 合作与商业标记: widgets_context 里带 cooperat/commerce/brand/promo/sponsor/advert/goods 字样
+//   ① 直播卡全删: type=live / is_live=true / 带 live_info (实况照片 live_photo 不算直播, 不受影响)
+//   ② 广告标记: ads / is_ads / ads_info
+//   ③ 合作与商业标记: widgets_context 里带 cooperat/commerce/brand/promo/sponsor/advert/goods 字样
 //      (含 order_cooperate, 是 hasCoop 的超集)
-//   ⑤ 带货挂载: has_related_goods=true 或 related_goods_num>0
+//   ④ 带货挂载: has_related_goods=true 或 related_goods_num>0
+// 视频帖不删 (2026-11-11 21:50 Han 取消视频全删——教程类视频要看; 视频与图文同标准, 只按上述标记删)。
 // 代价 (已知会并接受): 带商品链接的普通用户帖、带合作字样的生活帖会一并消失;
-//   品牌号无标记的自发普通帖不在标记范围内, 照常保留。
+//   品牌号无标记的自发普通帖、报备外软广不在标记范围内, 照常保留。
 function subCards(c) {
     const subs = [];
     if (c && typeof c === "object") {
@@ -108,16 +106,6 @@ function subCards(c) {
         }
     }
     return subs;
-}
-function isVideoCard(c) {
-    if (!c || typeof c !== "object") return false;
-    for (let o of [c].concat(subCards(c))) {
-        if (o.type === "video") return true;
-        if (o.note_type === 1 || o.note_type === "1") return true;
-        if (o.video_info_v2) return true;
-        if (o.model_type === "video") return true;
-    }
-    return false;
 }
 function isLiveCard(c) {
     if (!c || typeof c !== "object") return false;
@@ -146,44 +134,7 @@ function hasSpecialMark(c) {
     }
     return false;
 }
-const dropCard = c => isVideoCard(c) || isLiveCard(c) || hasSpecialMark(c);
-
-// [XHSW] 漏网卡指纹 (临时): 漏过严筛的卡, 按字段形状记一次结构, 供定位视频的真实标记字段;
-// 定案后连同本段与调用一并删除。两条通道并行:
-//   ① console.log (部分隧道日志导出不含脚本 console 输出, 会丢);
-//   ② 把指纹拼进一个注定失败的 http 请求 URL (xhsd.invalid)——隧道日志必记完整 URL, 不会丢。
-// 递归扫 type/video/live/media 类字段 (路径=值), 不论标记藏在哪一层都现形。
-const SHAPE_KEY = "xhs_survivor_shapes_v3";
-let PENDING_DIAG = "";
-function typeScan(o, path, depth, out) {
-    if (!o || typeof o !== "object" || depth > 3 || out.length >= 14) return;
-    for (let k of Object.keys(o)) {
-        const v = o[k];
-        if (/type|video|live|media|duration/i.test(k)) {
-            if (typeof v === "string" || typeof v === "number" || typeof v === "boolean") out.push(path + k + "=" + String(v).slice(0, 24));
-            else if (v && typeof v === "object" && !Array.isArray(v)) out.push(path + k + "=<obj>");
-        }
-        if (v && typeof v === "object" && !Array.isArray(v)) typeScan(v, path + k + ".", depth + 1, out);
-    }
-}
-function survivorLine(c) {
-    try {
-        if (!c || typeof c !== "object") return "";
-        const sub = subCards(c)[0];
-        const sig = Object.keys(c).sort().join(",") + "|" + (sub ? Object.keys(sub).sort().join(",") : "");
-        let seen = {};
-        try { seen = JSON.parse(store.get(SHAPE_KEY) || "{}"); } catch (e) {}
-        if (seen[sig]) return "";
-        seen[sig] = 1;
-        store.set(JSON.stringify(seen), SHAPE_KEY);
-        const scan = [];
-        typeScan(c, "", 0, scan);
-        const line = "T:" + String(c.title || c.display_title || (sub && (sub.title || sub.display_title)) || "").slice(0, 16) +
-            " | " + scan.join(" ") + " | keys:" + Object.keys(c).slice(0, 14).join(",");
-        console.log("[XHSW] " + line);
-        return line;
-    } catch (e) { return ""; }
-}
+const dropCard = c => isLiveCard(c) || hasSpecialMark(c);
 
 // 递归清空任意层级下名为 ads 的数组 (开屏配置用)
 function clearAdsArrays(node, depth) {
@@ -265,22 +216,11 @@ const ROUTES = [
         obj.data.categories = obj.data.categories.filter(c => c && !DROP.has(c.oid));
     }],
 
-    // 发现页瀑布流: 严筛——只留正常用户图文帖 (视频/直播全删, 带特殊标记全删;
+    // 发现页瀑布流: 严筛——带特殊标记全删, 直播全删 (视频帖保留, 与图文同标准;
     // 2026-10-27 探针实锤: v6 接口已无 ads 字段, 真实标记为 is_ads/ads_info, ads 保留兼容旧版)
     [/\/homefeed\?/, obj => {
-        let arr = null;
-        if (Array.isArray(obj.data)) arr = obj.data;
-        else if (obj.data && Array.isArray(obj.data.items)) arr = obj.data.items;
-        if (arr) {
-            const kept = arr.filter(c => !dropCard(c));
-            const fresh = [];
-            kept.forEach(c => { const l = survivorLine(c); if (l) fresh.push(l); });
-            if (Array.isArray(obj.data)) obj.data = kept; else obj.data.items = kept;
-            if (fresh.length) PENDING_DIAG = fresh.join(" ;; ").slice(0, 1500);
-        } else {
-            const l = survivorLine({ _shape: 1, title: "DATASHAPE", keys_dump: obj.data ? Object.keys(obj.data).join(",") : "null" });
-            if (l) PENDING_DIAG = "SHAPE " + l;
-        }
+        if (Array.isArray(obj.data)) obj.data = obj.data.filter(c => !dropCard(c));
+        else if (obj.data && Array.isArray(obj.data.items)) obj.data.items = obj.data.items.filter(c => !dropCard(c));
     }],
 
     // 搜索结果: 同一套严筛
@@ -331,19 +271,4 @@ try {
     }
 } catch (e) { console.log("[XHS] error: " + e); }
 
-// 指纹外发 (临时, 见 [XHSW] 段): 有新漏网形状时, 把指纹拼进一个 http 请求 URL 发出,
-// 隧道日志会记下完整 URL; $done 最迟 900ms 后照常执行, 不拖慢信息流。
-let _finished = false;
-function _finish() {
-    if (_finished) return;
-    _finished = true;
-    $done(body ? { body } : {});
-}
-if (PENDING_DIAG && typeof $task !== "undefined" && $task.fetch) {
-    try {
-        $task.fetch({ url: "http://xhsd.invalid/" + encodeURIComponent(PENDING_DIAG), method: "GET" }).then(_finish, _finish);
-        setTimeout(_finish, 900);
-    } catch (e) { _finish(); }
-} else {
-    _finish();
-}
+$done(body ? { body } : {});
